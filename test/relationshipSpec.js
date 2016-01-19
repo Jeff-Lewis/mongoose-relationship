@@ -693,6 +693,155 @@ describe("Schema Key Tests", function() {
         });
     });
 
+    describe("Many-To-Many in Sub-Document", function() {
+        var Child, Parent;
+        before(function() {
+            var ParentSchema = new Schema({
+                family: [
+                    {
+                        children: [{
+                            type: ObjectId,
+                            ref: "ChildManyMany"
+                        }],
+                        dogs: [{
+                            type: ObjectId,
+                            ref: "DogsManyMany"
+                        }]
+                    }
+                ]
+            });
+            Parent = mongoose.model("ParentManyMany", ParentSchema);
+
+            var ChildSchema = new Schema({
+                name: String,
+                parents: [{
+                    type: ObjectId,
+                    ref: "ParentManyMany",
+                    childPath: "family.children"
+                }]
+            });
+            ChildSchema.plugin(relationship, {
+                relationshipPathName: 'parents',
+                triggerMiddleware: false
+            });
+            Child = mongoose.model("ChildManyMany", ChildSchema);
+        });
+
+        beforeEach(function() {
+            this.parent = new Parent({});
+            this.otherParent = new Parent({});
+            this.child = new Child({});
+        });
+
+        it("should not add a child if the parent does not exist in the database", function(done) {
+            this.child.parents.push(this.parent._id);
+            this.child.parents.push(this.otherParent._id);
+            this.child.save(function(err, child) {
+                should.not.exist(err);
+                Parent.find({
+                    _id: {
+                        $in: child.parents
+                    }
+                }, function(err, parents) {
+                    parents.should.be.empty;
+                    done(err);
+                });
+            });
+        });
+
+        describe("Save Actions", function() {
+            beforeEach(function(done) {
+                var self = this;
+                self.parent.save(function(err, parent) {
+                    self.otherParent.save(function(err, otherParent) {
+                        self.child.parents.push(parent._id);
+                        self.child.parents.push(otherParent._id);
+                        self.child.save(function(err, child) {
+                            done(err);
+                        });
+                    });
+                });
+            });
+
+            it("should add a child to the parent collection if the parent is set", function(done) {
+                var self = this;
+                Parent.find({
+                    _id: {
+                        $in: this.child.parents
+                    }
+                }, function(err, parents) {
+                    var parent;
+                    for (var i = 0; i < parents.length; i++) {
+                        parent = parents[i];
+                        parent.should.have.property('children').containEql(self.child._id);
+                    }
+                    done(err);
+                });
+            });
+
+            it("should remove a child from the parent collection if the parent is set", function(done) {
+                var self = this;
+                self.child.remove(function(err, child) {
+                    Parent.find({
+                        _id: {
+                            $in: self.child.parents
+                        }
+                    }, function(err, parents) {
+                        var parent;
+                        for (var i = 0; i < parents.length; i++) {
+                            parent = parents[i];
+                            parent.should.have.property('children').not.containEql(self.child._id);
+                        }
+                        done(err);
+                    });
+                });
+            });
+
+            it("should remove a child from the parent collection if parent is removed from child's set", function(done) {
+                var self = this;
+                self.child.parents = [self.otherParent._id];
+                self.child.save(function(err, child) {
+                    should.not.exist(err);
+                    Parent.find({
+                        children: {
+                            $in: [child._id]
+                        }
+                    }, function(err, parents) {
+                        parents.should.have.a.lengthOf(1);
+                        parents[0]._id.should.eql(self.otherParent._id);
+                        done(err);
+                    });
+                });
+            });
+
+            it("should remove a child from the parents if the child relationship is removed from its parent list", function(done) {
+                var self = this;
+                self.child.parents = self.child.parents.splice(0, 1);
+                self.child.save(function(err, child) {
+                    should.not.exist(err);
+                    child.parents.should.have.length(1);
+                    async.parallel([
+                            function(cb) {
+                                Parent.findById(self.otherParent._id, function(err, parent) {
+                                    parent.children.should.be.empty;
+                                    cb(err);
+                                });
+                            },
+                            function(cb) {
+                                Parent.findById(self.parent._id, function(err, parent) {
+                                    parent.children.should.containEql(self.child._id);
+                                    cb(err);
+                                });
+                            }
+                        ],
+                        done);
+                });
+            });
+
+        });
+    });
+
+
     describe("Many-To-Many With Multiple relationships", function() {
         var Child, Parent, OtherParent;
         before(function() {
